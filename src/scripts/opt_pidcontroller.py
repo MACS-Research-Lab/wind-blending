@@ -24,7 +24,7 @@ from .setup import local_path
 DEFAULTS = Namespace(
     ntrials = 1000,
     nprocs = 5,
-    bounding_box = DEFAULTS_UAV.bounding_box,
+    safety_radius = DEFAULTS_UAV.safety_radius,
     max_velocity = DEFAULTS_UAV.max_velocity,
     max_acceleration = DEFAULTS_UAV.max_acceleration,
     max_tilt = DEFAULTS_UAV.max_tilt,
@@ -241,7 +241,7 @@ def make_env(env_params, args: Union[Namespace,Dict]=DEFAULTS):
 
 def make_objective(args: Namespace=DEFAULTS):
     env_kwargs = dict(
-        bounding_box=args.bounding_box,
+        safety_radius=args.safety_radius,
         seed=0,
         get_controller_fn=lambda m: get_controller(m, args.scurve, args)
     )
@@ -314,7 +314,7 @@ if __name__=='__main__':
     parser.add_argument('--use_yaw', action='store_true', default=DEFAULTS.use_yaw)
     parser.add_argument('--wind', help='wind force from heading "force@heading"', default=DEFAULTS.wind)
     parser.add_argument('--fault', help='motor loss of effectiveness "loss@motor"', default=DEFAULTS.fault)
-    parser.add_argument('--bounding_box', default=DEFAULTS.bounding_box, type=float)
+    parser.add_argument('--safety_radius', default=DEFAULTS.safety_radius, type=float)
     parser.add_argument('--num_sims', default=DEFAULTS.num_sims, type=int)
     parser.add_argument('--append', action='store_true', default=False)
     parser.add_argument('--pid_params', help='File to save pid params to.', type=str, default='')

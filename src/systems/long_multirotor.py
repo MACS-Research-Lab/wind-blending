@@ -11,17 +11,20 @@ class LongTrajEnv:
     def __init__(self, waypoints: Iterable[np.ndarray], base_env: MultirotorTrajEnv):
         self.waypoints = waypoints
         self.base_env = base_env
-        self.current_waypoint = None
+        self.current_waypoint_idx = None
 
 
     def reset(self):
-        self.base_env.reset(uav_x=np.zeros(12, np.float32))
         self.current_waypoint_idx = 0
-        normed_wp = self.waypoints[0] * 2 / (self.state_range[:3]+1e-6)
+        normed_wp = self.waypoints[0] * 2 / (self.base_env.state_range[:3]+1e-6)
+        waypt_vec = self.waypoints[self.current_waypoint_idx] - np.array([0,0,0])
+        self.base_env._des_unit_vec = waypt_vec / (np.linalg.norm(waypt_vec)+1e-6)
+        self.base_env.reset(uav_x=np.concatenate([np.zeros(12, np.float32), self.waypoints[self.current_waypoint_idx]]))
         return np.concatenate((self.base_env.state, normed_wp))
 
 
     def step(self, u: np.ndarray):
+        assert self.current_waypoint_idx is not None, "Make sure to call the reset() method first."
         # coming from a tanh NN policy function
         u = np.clip(u, a_min=-1., a_max=1.)
         u = self.base_env.unnormalize_action(u)
@@ -31,18 +34,22 @@ class LongTrajEnv:
         done = False
         reward = 0
         # TODO: return info dict with done flags
-        s, r, _, info = self.base_env.step(u)
+        s, reward, _, info = self.base_env.step(u)
+
         if info.get('reached'):
-            self.base_env.reset(uav_x=self.base_env.x)
             self.current_waypoint_idx += 1
             # if full traj is finished
             if self.current_waypoint_idx == len(self.waypoints):
                 done = True
-                normed_wp = self.waypoints[-1] * 2 / (self.state_range[:3]+1e-6)
+                normed_wp = self.waypoints[-1] * 2 / (self.base_env.state_range[:3]+1e-6)
+                reward += 100
             else:
-                self.base_env._des_unit_vec = np.linalg.norm(self.waypoints[self.current_waypoint_idx] - 
-                                               self.waypoints[self.current_waypoint_idx-1])
-                normed_wp = self.waypoints[self.current_waypoint_idx] * 2 / (self.state_range[:3]+1e-6)
+                self.base_env.reset(uav_x=np.concatenate([self.base_env.x[:12], self.waypoints[self.current_waypoint_idx]]))
+                waypt_vec = self.waypoints[self.current_waypoint_idx] - self.waypoints[self.current_waypoint_idx-1]
+                self.base_env._des_unit_vec = waypt_vec / np.linalg.norm(waypt_vec) # do I need to norm this?
+                normed_wp = self.waypoints[self.current_waypoint_idx] * 2 / (self.base_env.state_range[:3]+1e-6)
+        else:
+            normed_wp = self.waypoints[self.current_waypoint_idx-1] * 2 / (self.base_env.state_range[:3]+1e-6)
         s = np.concatenate((s, normed_wp))
 
         # reward calculation
@@ -50,21 +57,12 @@ class LongTrajEnv:
         # done calculations
         if not done:
             # tipped, out of bounds from the info dict
-            pass
+            if info.get('tipped') or info.get('outofbounds') or info.get('outoftime'):
+                done = True
+                # can set negative reward here
 
         # state is a 12+3 element vector, where last 3
         # elements are the normalized next waypoint
-        return s, reward, done, {}
+        return s, reward, done, info
     
-
-
-def test():
-    env = LongTrajEnv(
-        waypoints=[[20,0,0], [40,0,0], [60,0,0]],
-        MultirotorTrajEnv(**kwargs)
-    )
-    done = False
-    while not done:
-        state, reward, done, _ = env.step(env.waypoints[-1])
-    # plotting logic
         

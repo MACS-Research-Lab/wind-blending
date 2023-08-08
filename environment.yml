@@ -7,8 +7,8 @@ dependencies:
   - pandas
   - matplotlib
   - jupyter
-  - jupyter_contrib_nbextensions
-  - jupyterthemes
+  # - jupyter_contrib_nbextensions
+  # - jupyterthemes
   - tqdm
   - scikit-learn
   - pytorch::pytorch=1.12
@@ -19,14 +19,15 @@ dependencies:
   - optuna
   - pip
   - pip:
+    - setuptools==65.5.0
     - gym[box2d]==0.21 # breaking changes in API for later versions (for StableBaselines)
     - tensorboard
     - tensorboardX
     - -e src/vendor/multirotor
     - -e src/vendor/commonml
     - -e src/vendor/stable-baselines3
-    - -e src/vendor/mpc.pytorch
-    - -e src/vendor/garage
+    # - -e src/vendor/mpc.pytorch
+    # - -e src/vendor/garage
     - tbparse==0.0.7
     - optuna-dashboard==0.8.1
     - filterpy==1.4

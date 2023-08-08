@@ -21,7 +21,7 @@ from multirotor.controller import (
 from .base import SystemEnv
 
 DEFAULTS = Namespace(
-    bounding_box = 20.,
+    safety_radius = 10,
     max_velocity = 3.,
     max_acceleration = 2.5,
     max_tilt = np.pi / 12,
@@ -177,7 +177,7 @@ class MultirotorTrajEnv(SystemEnv):
 
     def __init__(
         self, vp=VP, sp=SP,
-        q=np.diagflat([1,1,1,0.25,0.25,0.25,0.5,0.5,0.5,0.1,0.1,0.1]),
+        q=np.diagflat([1,1,1,0.25,0.25,0.25,0.5,0.5,0.5,0.1,0.1,0.1,1,1,1]),
         r = np.diagflat([1,1,1,0]) * 1e-4,
         dt=None, seed=None,
         xformA=np.eye(12), xformB=np.eye(4),
@@ -188,8 +188,9 @@ class MultirotorTrajEnv(SystemEnv):
         max_rads: float=DEFAULTS.max_rads,
         # length of cube centered at origin within which position is initialized,
         # half length of cube centered at origin within which vehicle may move
-        bounding_box: float=DEFAULTS.bounding_box,
+        safety_radius: float=DEFAULTS.safety_radius,
         random_disturbance_direction=False,
+        proximity=0.65,
         multirotor_class=Multirotor, multirotor_kwargs={}
     ):
         system, extra = create_multirotor(
@@ -209,7 +210,7 @@ class MultirotorTrajEnv(SystemEnv):
         self.observation_space = gym.spaces.Box(
             # pos err, vel err, angle error, ang rate err, prescribed dynamics
             low=-1, high=1,
-            shape=(12,), dtype=self.dtype
+            shape=(15,), dtype=self.dtype
         )
         self.action_space = gym.spaces.Box(
             # x,y,z
@@ -219,19 +220,18 @@ class MultirotorTrajEnv(SystemEnv):
         self.random_disturbance_direction = random_disturbance_direction
         self.max_rads = max_rads
         self.scaling_factor = scaling_factor
-        self.bounding_box = bounding_box
+        self.safety_radius = safety_radius
         self.overshoot_factor = 0.5
         self.state_range = np.empty(self.observation_space.shape, self.dtype)
         self.action_range = np.empty(self.action_space.shape, self.dtype)
         self.x = np.zeros(self.observation_space.shape, self.dtype)
         self.steps_u = steps_u
 
-        self.period = 20 # seconds
+        self.period = 300 # seconds
         self.max_time_penalty = self.period
         self.motion_reward_scaling = 10
-        self.fail_penalty = self.pass_reward = self.bounding_box * self.motion_reward_scaling * 2
-        self._proximity = max(self.vehicle.params.distances)
-
+        self.fail_penalty = self.pass_reward = self.safety_radius * self.motion_reward_scaling * 2
+        self._proximity = proximity
 
     @property
     def state(self) -> np.ndarray:
@@ -259,31 +259,37 @@ class MultirotorTrajEnv(SystemEnv):
         self.ctrl.reset()
         self.vehicle.reset()
         # Nominal range of state, not accounting for overshoot due to process dynamics
-        self.state_range[0:3] = 2 * self.bounding_box
+        self.state_range[0] = 500
+        self.state_range[1] = 500
+        self.state_range[2] = 100 
         self.state_range[3:6] = 2 * self.ctrl.ctrl_p.max_velocity
         self.state_range[6:9] = 2 * self.ctrl.ctrl_v.max_tilt
         self.state_range[9:12] = 2 * self.ctrl.ctrl_v.max_tilt * self.ctrl.ctrl_a.k_p
+        self.state_range[12:] = self.state_range[:3]
         self.action_range = self.state_range[:self.action_space.shape[0]] * self.scaling_factor
         # Max overshoot allowed, which will cause episode to terminate
-        self._max_pos = self.bounding_box * (1 + self.overshoot_factor) / 2
+        self._max_pos = self.safety_radius * (1 + self.overshoot_factor) / 2
         self._max_angle = self.ctrl.ctrl_v.max_tilt * (1 + self.overshoot_factor)
         self.time_penalty = self.dt * self.steps_u
 
         pos = np.asarray(uav_x[0:3]) if uav_x is not None else \
-              self.random.uniform(-self.bounding_box/2, self.bounding_box/2, size=3)
+              self.random.uniform(-self.safety_radius/2, self.safety_radius/2, size=3)
         vel = np.asarray(uav_x[3:6]) if uav_x is not None else \
               self.random.uniform(-self.ctrl.ctrl_p.max_velocity/2, self.ctrl.ctrl_p.max_velocity/2, size=3)
         ori = np.asarray(uav_x[6:9]) if uav_x is not None else \
               self.random.uniform(-0., 0., size=3)
         rat = np.asarray(uav_x[9:12]) if uav_x is not None else \
               self.random.uniform(-0.0, 0.0, size=3)
-        self.x = np.concatenate((pos, vel, ori, rat), dtype=self.dtype)
+        next_wp = np.asarray(uav_x[12:15]) if uav_x is not None else \
+              np.array([0,0,0])
+        self.x = np.concatenate((pos, vel, ori, rat, next_wp), dtype=self.dtype)
         # Manually set underlying vehicle's state
         self.vehicle.state = self.x
         self._des_unit_vec = (0 - pos) / (np.linalg.norm(pos) + 1e-6)
         if self.random_disturbance_direction:
             pass
             # self._orig_dist_fn = self.vehicle.
+
         return self.state
 
 
@@ -300,23 +306,26 @@ class MultirotorTrajEnv(SystemEnv):
             # that SystemEnv.step() does
             self.vehicle.state = self.x
             self.vehicle.t = self.t
-            dist = np.linalg.norm(self.x[:3])
-            reached = dist <= self._proximity
-            outofbounds = np.any(np.abs(self.x[:3]) > self._max_pos)
+            dist = np.linalg.norm(self.x[12:] - self.x[:3])
+            reached = dist <= self._proximity 
+            delta_pos = (self.x[:3] - oldpos)
+            cross = np.linalg.norm(np.cross(delta_pos, self._des_unit_vec))
+
+            proj = np.dot(delta_pos, self._des_unit_vec) / (np.dot(self._des_unit_vec, self._des_unit_vec)+1e-6) * self._des_unit_vec
+            diff_vector = delta_pos - proj
+            normal_distance = np.linalg.norm(diff_vector)
+
+            outofbounds = normal_distance > self.safety_radius #TODO verify this
             outoftime = self.t >= self.period
             tipped = np.any(np.abs(self.x[6:9]) > self._max_angle)
             done = outoftime or outofbounds or reached or tipped
+
             if done:
                 i.update(dict(reached=reached, outofbounds=outofbounds, outoftime=outoftime, tipped=tipped))
                 break
 
-
-        # advance = olddist - dist
-        delta_pos = (self.x[:3] - oldpos)
         advance = np.linalg.norm(delta_pos)
-        cross = np.linalg.norm(np.cross(delta_pos, self._des_unit_vec))
         delta_turn = np.abs(self.x[8]) - old_turn
-        # cross = 0.
         reward = ((advance - cross - delta_turn) * self.motion_reward_scaling) - self.time_penalty
         if reached:
             reward += self.pass_reward
@@ -339,7 +348,7 @@ def run_sim(
     other_vars=()
 ) -> DataLog:
     if not isinstance(traj, Trajectory):
-        traj = Trajectory(env.vehicle, traj, proximity=env._proximity, resolution=env.bounding_box/2)
+        traj = Trajectory(env.vehicle, traj, proximity=env._proximity, resolution=env.safety_radius/2) #TODO: change this
     log = DataLog(env.vehicle, ctrl if isinstance(ctrl, Controller) else env.ctrl,
                   other_vars=('reward', 'speeds', *other_vars))
     if getattr(env, 'ekf', False):
@@ -396,7 +405,7 @@ def run_trajectory(
     if env.ekf:
         env.ekf.state = env.vehicle.state.copy()
     if not isinstance(traj, Trajectory):
-        traj = Trajectory(env.vehicle, traj, proximity=2, resolution=env.bounding_box/2)
+        traj = Trajectory(env.vehicle, traj, proximity=2, resolution=env.safety_radius/2) #TODO: change this
     params = traj.get_params()
     points = traj.generate_trajectory(curr_pos=pos_global)[1:]
     for wp in tqdm(points, leave=False):
