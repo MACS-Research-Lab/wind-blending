@@ -8,6 +8,7 @@ import pickle
 import numpy as np
 import optuna
 from systems.multirotor import Multirotor, MultirotorTrajEnv, DEFAULTS as DEFAULTS_UAV
+from systems.long_multirotor import LongTrajEnv
 from multirotor.trajectories import Trajectory, eight_curve
 from multirotor.helpers import DataLog
 from multirotor.coords import direction_cosine_matrix, inertial_to_body
@@ -232,7 +233,7 @@ def make_env(env_params, args: Union[Namespace,Dict]=DEFAULTS):
     if args.wind != DEFAULTS.wind and 'disturbance_fn' not in env_params.keys():
         env_params['disturbance_fn'] = make_disturbance_fn(args.wind)
     if args.env_kind == 'traj':
-        env = MultirotorTrajEnv(**env_params)
+        env = LongTrajEnv(**env_params)
     if args.fault != DEFAULTS.fault:
         apply_fault(env, args.fault)
     return env

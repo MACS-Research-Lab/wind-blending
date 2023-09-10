@@ -1,14 +1,17 @@
 import sys
 import os
+from .setup import local_path
 import multiprocessing as mp
 from argparse import ArgumentParser, Namespace
 import pickle
-
 import optuna
 import numpy as np
-from rl import learn_rl, evaluate_rl
+from multirotor.trajectories import Trajectory
+from rl import learn_rl, evaluate_rl, load_agent
 from stable_baselines3.common.callbacks import BaseCallback
-from systems.multirotor import Multirotor, MultirotorTrajEnv, VP
+from systems.multirotor_sliding_error import Multirotor, MultirotorTrajEnv, VP
+from systems.long_multirotor_sliding_error import LongTrajEnv
+
 
 from .opt_pidcontroller import (
     get_controller as get_controller_base,
@@ -17,7 +20,7 @@ from .opt_pidcontroller import (
     make_env,
     DEFAULTS as PID_DEFAULTS
 )
-from .setup import local_path
+
 
 DEFAULTS = Namespace(
     ntrials = 100,
@@ -78,36 +81,20 @@ def get_study(study_name: str=DEFAULTS.study_name, seed:int=0, args: Namespace=D
 
 
 
-def get_controller(m: Multirotor, trial: optuna.Trial, args: Namespace=DEFAULTS):
-    ctrl = get_controller_base(m, scurve=args.scurve, args=args)
-    # Taken from PID optimization script, given the default controller params
-    if isinstance(args.pid_params, str) and len(args.pid_params) > 0:
-        with open(args.pid_params, 'rb') as f:
-            params = pickle.load(f)
-    elif isinstance(args.pid_params, dict):
-        params = args.pid_params
-    else:
-        params = make_controller_from_trial(trial=trial, args=args, prefix='pid-')
-    ctrl.set_params(**params)
-    return ctrl
-
-def get_established_controller(m: Multirotor):
+def get_established_controller(m: Multirotor, speed: int = 15):
+    """
+    This returns the manually-tuned PID controller that is fixed for all experiments. It was tuned by an expert to handle up to 15 m/s wind. 
+    (Though, of course, it is less safe at higher winds.)
+    """
     ctrl = get_controller_base(m, scurve=False)
 
-    with open('/home/courseac/projects/transfer_similarity/src/params/manual_pid.pkl', 'rb') as f: #TODO: make relative
+    with open('../src/params/manual_pid.pkl', 'rb') as f: #TODO: make relative
         optimal_params = pickle.load(f)
 
     optimal_params['ctrl_z']['k_p'] = np.array([0.4])
     optimal_params['ctrl_z']['k_i'] = np.array([0.0])
     optimal_params['ctrl_z']['k_d'] = np.array([0.0])
-    optimal_params['ctrl_p']['max_velocity'] = 7
-
-    optimal_params['ctrl_a']['k_p'] = np.array([1.5, 2, 2])
-    optimal_params['ctrl_a']['k_i'] = np.array([0.5,0,0])
-    optimal_params['ctrl_a']['k_d'] = np.array([0.05,0,0])
-    optimal_params['ctrl_r']['k_p'] = np.array([10, 10, 10])
-    optimal_params['ctrl_r']['k_i'] = np.array([0,0,0])
-    optimal_params['ctrl_r']['k_d'] = np.array([0.5,0,0])
+    optimal_params['ctrl_p']['max_velocity'] = speed # to modify the max speed of the UAV, modify this
 
     z_params = optimal_params['ctrl_z']
     optimal_params['ctrl_vz']['k_p'] = 25
@@ -120,46 +107,136 @@ def get_established_controller(m: Multirotor):
 
 
 
+def get_env(wind_ranges, scurve=False, **kwargs):  
+    kw = dict(
+        safety_radius=kwargs['safety_radius'],
+        vp=VP,get_controller_fn=lambda m: get_established_controller(m),
+        steps_u=kwargs['steps_u'],
+        scaling_factor=kwargs['scaling_factor'],
+        wind_ranges=wind_ranges,
+        proximity=5,
+        seed=kwargs['seed'])
+    return MultirotorTrajEnv(**kw)
+
+
+
 def make_objective(args: Namespace=DEFAULTS):
     def objective(trial: optuna.Trial):
-        bounding_rect_length = trial.suggest_int('bounding_rect_length', 2, 25) # how long is the bounding rectangle?
-        bounding_rect_width = args.safety_corridor
+        all_directions = args.cardinal == 'True'
+        bounding_rect_length = 200 # can suggest this if we want to use it
+        # bounding_rect_length = trial.suggest_int("bounding_rect_length", 5, 50, step=5)
+        bounding_rect_width = args.safety_radius
         
         env_kwargs = dict(
             safety_corridor = bounding_rect_width, 
             seed=0,
             get_controller_fn=lambda m: get_established_controller(m, args),
-            vp = VP
+            vp = VP,
+            safety_radius=bounding_rect_width,
+           
         )
 
+        env_kwargs['steps_u'] = 50 # assume half a second
+        env_kwargs['scaling_factor'] = trial.suggest_int('scaling_factor', 1, 7, step=1) # for now, use this to determine the action range
         
-        if args.env_kind=='traj':
-            env_kwargs['steps_u'] = trial.suggest_int('steps_u', 1, 50, step=5)
-            env_kwargs['scaling_factor'] = trial.suggest_float('scaling_factor', 0.05, 1., step=0.05)
-        env = make_env(env_kwargs, args)
-        ep_len = env.period // (env.dt * env.steps_u)
-        ep_len = ep_len + (32 - (ep_len % 32)) # len as a multiple of 32
-        learning_rate = trial.suggest_float('learning_rate', 1e-3, 1e-2, log=True)
+        square_np = np.array([[100,0,0], [100,100,0], [0,100,0], [0,0,0]]) # set up your trajectory here
+        square_traj = Trajectory(None, points=square_np, resolution=bounding_rect_length)
+        square_wpts = square_traj.generate_trajectory(curr_pos=np.array([0,0,0]))
+
+        wind_d = trial.suggest_int("window_distance", 10, 50)
+        
+        env = LongTrajEnv(
+            waypoints = square_wpts,
+            base_env = get_env(wind_ranges = [(8,10), (8,10), (0,0)], **env_kwargs), # what ranges of wind you want to experience in hyperparmeter optimization [(xmin, xmax), (ymin, ymax), (zmin, zmax)]
+            initial_waypoints=square_np,
+            randomize_direction=True, # whether to randomize the direction the trajectory is flown during HPO
+            always_modify_wind=False, # whether to generate a different wind vector for each bounding box, note: if you include this, fix the length of the bounding box
+            random_cardinal_wind=all_directions,
+            window_distance = wind_d
+        )
+        
+        policy_layers = trial.suggest_categorical("policy_layers", [1,2,3])
+        policy_size = trial.suggest_int("policy_size", 32, 256, step=32)
+
+        learning_rate = trial.suggest_float('learning_rate', 1e-8, 1e-3, log=True)
         n_epochs = trial.suggest_int('n_epochs', 1, 5)
-        n_steps = trial.suggest_int('n_steps', max(ep_len, 32), 10*ep_len, step=ep_len)
-        batch_size = trial.suggest_int('batch_size', 32, min(256, n_steps), step=32)
+        n_steps = trial.suggest_int('n_steps', 16, 12000, step=16) # what if we allow this to be much higher?
+        # n_steps = 4000 // env_kwargs['steps_u'] # expect around 4000 when interacts every timestep
+        batch_size = trial.suggest_int('batch_size', 32, 256, step=32)
         learn_kwargs = dict(
-            steps = args.max_steps,
+            steps = trial.suggest_categorical('training_interactions', [50000, 100000, 150000, 200000, 250000]),
+            # steps = 5000,
             n_steps = n_steps,
             learning_rate = learning_rate,
             n_epochs = n_epochs,
             batch_size = batch_size,
             seed=0,
             log_env_params = ('steps_u', 'scaling_factor') if args.env_kind=='traj' else (),
-            tensorboard_log = env.name + ('/optstudy/%s/%03d' % (args.study_name, trial.number)),
+            tensorboard_log = env.base_env.name + ('/optstudy/%s/%03d' % (args.study_name, trial.number)),
             policy_kwargs=dict(squash_output=False,
-                                net_arch=[dict(pi=[128,128], vf=[128,128])]),
+                                net_arch=[dict(pi=[policy_size]*policy_layers, vf=[policy_size]*policy_layers)]),
             callback = Callback(trial=trial)
         )
-        agent = learn_rl(env, progress_bar=False, **learn_kwargs)
+
+        agent = learn_rl(env, progress_bar=True, **learn_kwargs)
         agent.save(agent.logger.dir + '/agent')
-        rew, std, time = evaluate_rl(agent, make_env(env_kwargs, args), args.num_sims) 
-        return rew
+        agent = load_agent(agent.logger.dir + '/agent')
+
+        if all_directions: # if training on cardinal wind, you probably want to evaluate hyperparameters on cardinal wind
+            # all_wind_ranges = [[(0,0), (0,0), (0,0)],
+            #                    [(0,0), (5,5), (0,0)],
+            #                    [(0,0), (7,7), (0,0)],
+            #                    [(0,0), (10,10), (0,0)],
+            #                    [(0,0), (-5,-5), (0,0)],
+            #                    [(0,0), (-7,-7), (0,0)],
+            #                    [(0,0), (-10,-10), (0,0)],
+            #                    [(5,5), (0,0), (0,0)],
+            #                    [(7,7), (0,0), (0,0)],
+            #                    [(10,10), (0,0), (0,0)],
+            #                    [(-5,-5), (0,0), (0,0)],
+            #                    [(-7,-7), (0,0), (0,0)],
+            #                    [(-10,-10), (0,0), (0,0)]] 
+             all_wind_ranges = [[(0,0), (8,8), (0,0)],
+                               [(0,0), (9,9), (0,0)],
+                               [(0,0), (10,10), (0,0)],
+                               [(0,0), (-8,-8), (0,0)],
+                               [(0,0), (-9,-9), (0,0)],
+                               [(0,0), (-10,-10), (0,0)],
+                               [(8,8), (0,0), (0,0)],
+                               [(9,9), (0,0), (0,0)],
+                               [(10,10), (0,0), (0,0)],
+                               [(-8,-8), (0,0), (0,0)],
+                               [(-9,-9), (0,0), (0,0)],
+                               [(-10,-10), (0,0), (0,0)]] 
+        else: # if not training on cardinal wind, what wind magnitudes do you want to be considered for evaluating hyperparameters?
+            # all_wind_ranges = [[(0,0), (0,0), (0,0)],
+            #                [(0,0), (5,5), (0,0)],
+            #                 [(0,0), (7,7), (0,0)],
+            #                [(0,0), (10,10), (0,0)],]
+            all_wind_ranges = [[(0,0), (10,10), (0,0)],]
+            
+
+        rewards = []
+        for wind_range in all_wind_ranges:
+            env = LongTrajEnv(
+                waypoints = square_wpts,
+                base_env = get_env(wind_ranges = wind_range, **env_kwargs),
+                initial_waypoints=square_np,
+                window_distance=wind_d,
+                randomize_direction=False # during evaluation, fix the directionf or consistency
+            )
+
+            episode_reward = 0
+            state = np.array(env.reset(), dtype=np.float32)
+            done = False
+            while not done:
+                action = agent.predict(state, deterministic=True)[0]
+                state, reward, done, info = env.step(action)
+                episode_reward += reward
+
+            rewards.append(episode_reward)
+
+        return np.mean(rewards)
     return objective
 
 
@@ -211,7 +288,8 @@ if __name__=='__main__':
     parser.add_argument('--use_yaw', action='store_true', default=DEFAULTS.use_yaw)
     parser.add_argument('--wind', help='wind force from heading "force@heading"', default=DEFAULTS.wind)
     parser.add_argument('--fault', help='motor loss of effectiveness "loss@motor"', default=DEFAULTS.fault)
-    parser.add_argument('--bounding_box', default=DEFAULTS.bounding_box, type=float)
+    parser.add_argument('--safety_radius', help="size of safety corridor in meters", default=DEFAULTS.safety_radius, type=float)
+    parser.add_argument('--cardinal', help="whether to experience wind from the cardinal directions", default=False)
     parser.add_argument('--num_sims', default=DEFAULTS.num_sims, type=int)
     parser.add_argument('--max_steps', default=DEFAULTS.max_steps, type=int)
     parser.add_argument('--append', action='store_true', default=False)
@@ -250,7 +328,9 @@ if __name__=='__main__':
 
     for key in vars(args):
         study.set_user_attr(key, getattr(args, key))
-
+        
+    
     mp.set_start_method('spawn')
     with mp.Pool(args.nprocs) as pool:
         pool.starmap(optimize, [(args, i, reuse[i]) for i in range(args.nprocs)])
+        # pool.starmap(optimize, [(args, i) for i in range(args.nprocs)])

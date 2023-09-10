@@ -56,12 +56,13 @@ class SystemEnv(gym.Env):
 
     def reward(self, xold, u, x):
         # squeeze in case x has a batch dimension [1, x] (while using torch.mpc)
-        x = np.atleast_1d(x.squeeze())
-        u = np.atleast_1d(u.squeeze())
-        return -(x.T @ self.q @ x + u.T @ self.r @ u).item()
+        # x = np.atleast_1d(x.squeeze())
+        # u = np.atleast_1d(u.squeeze())
+        # return -(x.T @ self.q @ x + u.T @ self.r @ u).item()
+        return None
 
 
-    def step(self, u: np.ndarray, from_x: np.ndarray=None, persist=True, dt=None):
+    def step(self, u: np.ndarray, from_x: np.ndarray=None, persist=True, dt=None, is_velocity=False):
         u = np.asarray(u, dtype=self.dtype)
         old_dxdt = self.dxdt
         old_x = np.asarray(self.x if from_x is None else from_x, dtype=self.dtype)
