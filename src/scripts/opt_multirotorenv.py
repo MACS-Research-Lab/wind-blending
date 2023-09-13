@@ -1,5 +1,7 @@
 import sys
 import os
+
+import torch
 from .setup import local_path
 import multiprocessing as mp
 from argparse import ArgumentParser, Namespace
@@ -11,7 +13,8 @@ from rl import learn_rl, evaluate_rl, load_agent
 from stable_baselines3.common.callbacks import BaseCallback
 from systems.multirotor_sliding_error import Multirotor, MultirotorTrajEnv, VP
 from systems.long_multirotor_sliding_error import LongTrajEnv
-
+# from systems.long_blending import LongBlendingEnv
+# from systems.blending import BlendingEnv
 
 from .opt_pidcontroller import (
     get_controller as get_controller_base,
@@ -116,7 +119,7 @@ def get_env(wind_ranges, scurve=False, **kwargs):
         wind_ranges=wind_ranges,
         proximity=5,
         seed=kwargs['seed'])
-    return MultirotorTrajEnv(**kw)
+    return BlendingEnv(**kw)
 
 
 
@@ -137,17 +140,19 @@ def make_objective(args: Namespace=DEFAULTS):
         )
 
         env_kwargs['steps_u'] = 50 # assume half a second
-        env_kwargs['scaling_factor'] = trial.suggest_int('scaling_factor', 1, 7, step=1) # for now, use this to determine the action range
+        # env_kwargs['scaling_factor'] = trial.suggest_int('scaling_factor', 1, 7, step=1) # for now, use this to determine the action range
+        env_kwargs['scaling_factor'] = 5
         
         square_np = np.array([[100,0,0], [100,100,0], [0,100,0], [0,0,0]]) # set up your trajectory here
         square_traj = Trajectory(None, points=square_np, resolution=bounding_rect_length)
         square_wpts = square_traj.generate_trajectory(curr_pos=np.array([0,0,0]))
 
-        wind_d = trial.suggest_int("window_distance", 10, 50)
+        # wind_d = trial.suggest_int("window_distance", 10, 50)
+        wind_d = 10
         
-        env = LongTrajEnv(
+        env = LongBlendingEnv(
             waypoints = square_wpts,
-            base_env = get_env(wind_ranges = [(8,10), (8,10), (0,0)], **env_kwargs), # what ranges of wind you want to experience in hyperparmeter optimization [(xmin, xmax), (ymin, ymax), (zmin, zmax)]
+            base_env = get_env(wind_ranges = [(0,10), (0,10), (0,0)], **env_kwargs), # what ranges of wind you want to experience in hyperparmeter optimization [(xmin, xmax), (ymin, ymax), (zmin, zmax)]
             initial_waypoints=square_np,
             randomize_direction=True, # whether to randomize the direction the trajectory is flown during HPO
             always_modify_wind=False, # whether to generate a different wind vector for each bounding box, note: if you include this, fix the length of the bounding box
@@ -183,31 +188,31 @@ def make_objective(args: Namespace=DEFAULTS):
         agent = load_agent(agent.logger.dir + '/agent')
 
         if all_directions: # if training on cardinal wind, you probably want to evaluate hyperparameters on cardinal wind
-            # all_wind_ranges = [[(0,0), (0,0), (0,0)],
-            #                    [(0,0), (5,5), (0,0)],
-            #                    [(0,0), (7,7), (0,0)],
-            #                    [(0,0), (10,10), (0,0)],
-            #                    [(0,0), (-5,-5), (0,0)],
-            #                    [(0,0), (-7,-7), (0,0)],
-            #                    [(0,0), (-10,-10), (0,0)],
-            #                    [(5,5), (0,0), (0,0)],
-            #                    [(7,7), (0,0), (0,0)],
-            #                    [(10,10), (0,0), (0,0)],
-            #                    [(-5,-5), (0,0), (0,0)],
-            #                    [(-7,-7), (0,0), (0,0)],
-            #                    [(-10,-10), (0,0), (0,0)]] 
-             all_wind_ranges = [[(0,0), (8,8), (0,0)],
-                               [(0,0), (9,9), (0,0)],
+            all_wind_ranges = [[(0,0), (0,0), (0,0)],
+                               [(0,0), (5,5), (0,0)],
+                               [(0,0), (7,7), (0,0)],
                                [(0,0), (10,10), (0,0)],
-                               [(0,0), (-8,-8), (0,0)],
-                               [(0,0), (-9,-9), (0,0)],
+                               [(0,0), (-5,-5), (0,0)],
+                               [(0,0), (-7,-7), (0,0)],
                                [(0,0), (-10,-10), (0,0)],
-                               [(8,8), (0,0), (0,0)],
-                               [(9,9), (0,0), (0,0)],
+                               [(5,5), (0,0), (0,0)],
+                               [(7,7), (0,0), (0,0)],
                                [(10,10), (0,0), (0,0)],
-                               [(-8,-8), (0,0), (0,0)],
-                               [(-9,-9), (0,0), (0,0)],
+                               [(-5,-5), (0,0), (0,0)],
+                               [(-7,-7), (0,0), (0,0)],
                                [(-10,-10), (0,0), (0,0)]] 
+            #  all_wind_ranges = [[(0,0), (5,5), (0,0)],
+            #                    [(0,0), (6,6), (0,0)],
+            #                    [(0,0), (7,7), (0,0)],
+            #                    [(0,0), (-5,-5), (0,0)],
+            #                    [(0,0), (-6,-6), (0,0)],
+            #                    [(0,0), (-7,-7), (0,0)],
+            #                    [(5,5), (0,0), (0,0)],
+            #                    [(6,6), (0,0), (0,0)],
+            #                    [(7,7), (0,0), (0,0)],
+            #                    [(-5,-5), (0,0), (0,0)],
+            #                    [(-6,-6), (0,0), (0,0)],
+            #                    [(-7,-7), (0,0), (0,0)]] 
         else: # if not training on cardinal wind, what wind magnitudes do you want to be considered for evaluating hyperparameters?
             # all_wind_ranges = [[(0,0), (0,0), (0,0)],
             #                [(0,0), (5,5), (0,0)],
@@ -218,7 +223,7 @@ def make_objective(args: Namespace=DEFAULTS):
 
         rewards = []
         for wind_range in all_wind_ranges:
-            env = LongTrajEnv(
+            env = LongBlendingEnv(
                 waypoints = square_wpts,
                 base_env = get_env(wind_ranges = wind_range, **env_kwargs),
                 initial_waypoints=square_np,
