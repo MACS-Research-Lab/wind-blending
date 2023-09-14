@@ -82,7 +82,7 @@ def get_controller(
         max_err_i=DEFAULTS.max_velocity, vehicle=m,
         max_velocity=max_velocity,
         max_acceleration=max_acceleration  ,
-        square_root_scaling=False  
+        square_root_scaling=False,  
     )
     vel = VelController(
         2.0, 1.0, 0.5,

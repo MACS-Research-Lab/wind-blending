@@ -71,7 +71,7 @@ class LongBlendingEnv:
         # u = np.clip(u, a_min=-1., a_max=1.)
         # u = u / (np.sum(u+1) + 1e-6) # normalize these to represent convex combination
 
-        u =  self.current_actions.T @ softmax(u) # output of agent is the weight on each action
+        u =  self.current_actions.T @ (softmax(u*5)) # output of agent is the weight on each action
 
         done = False
         reward = 0

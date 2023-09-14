@@ -4,10 +4,12 @@ from multirotor.trajectories import Trajectory
 from scripts.opt_multirotorenv import get_established_controller
 from systems.multirotor import VP
 
-from systems.multirotor21d import MultirotorTrajEnv as BoundingBaseEnv
-from systems.long_multirotor21d import LongTrajEnv as BoundingLongEnv
-from systems.multirotor_sliding import MultirotorTrajEnv as SlidingBaseEnv
-from systems.long_multirotor_sliding import LongTrajEnv as SlidingLongEnv
+from systems.multirotor_sliding_error import MultirotorTrajEnv as SlidingBaseEnv
+from systems.long_multirotor_sliding_error import LongTrajEnv as SlidingLongEnv
+from systems.long_blending import LongBlendingEnv
+from systems.blending import BlendingEnv
+from systems.sliding_error_leash import MultirotorTrajEnv as LeashBaseEnv
+
 
 def setup_base_params(wind_ranges, **kwargs):
      kw = dict(
@@ -24,17 +26,20 @@ def setup_base_params(wind_ranges, **kwargs):
 class OctorotorEnvSelector():
     def __init__(self):
         self.envs = {
-            "bounding": (BoundingBaseEnv, BoundingLongEnv),
-            "sliding": (SlidingBaseEnv, SlidingLongEnv)
+            "sliding": (SlidingBaseEnv, SlidingLongEnv),
+            "blending": (BlendingEnv, LongBlendingEnv),
+            "leashed": (LeashBaseEnv, SlidingLongEnv) 
         }
     
     def get_env(self, env_name: str, params: dict, wind_range: list, waypts: np.ndarray):
         base_env_class, long_env_class = self.envs[env_name]
         
+        leash = env_name == "leashed"
+            
         env_kwargs = dict(
             safety_radius=5, 
             seed=0,
-            get_controller_fn=lambda m: get_established_controller(m),
+            get_controller_fn=lambda m: get_established_controller(m, leash=leash),
             vp = VP,
         )
 
@@ -48,20 +53,14 @@ class OctorotorEnvSelector():
         traj = Trajectory(None, points=waypts, resolution=bounding_len) 
         wpts = traj.generate_trajectory(curr_pos=np.array([0,0,0]))
 
-        if "window_distance" in params.keys():
-            long_env = long_env_class( # can clean this up by adding all to a dict then just passing the **dict
-                waypoints = wpts,
-                base_env = base_env_class(**base_params),
-                initial_waypoints = waypts,
-                randomize_direction= False,
-                window_distance = params['window_distance']
-            )
-        else:
-            long_env = long_env_class(
-                waypoints = wpts,
-                base_env = base_env_class(**base_params),
-                initial_waypoints = waypts,
-                randomize_direction= False
-            )
+        
+        long_env = long_env_class( # can clean this up by adding all to a dict then just passing the **dict
+            waypoints = wpts,
+            base_env = base_env_class(**base_params),
+            initial_waypoints = waypts,
+            randomize_direction= False,
+            window_distance = params['window_distance']
+        )
+       
         
         return long_env

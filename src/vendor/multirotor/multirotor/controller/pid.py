@@ -191,8 +191,9 @@ class PosController(PIDController):
         self.k_p = np.ones(2) * np.asarray(self.k_p, self.dtype)
         self.k_i = np.ones(2) * np.asarray(self.k_i, self.dtype)
         self.k_d = np.ones(2) * np.asarray(self.k_d, self.dtype)
-        if self.leashing or self.square_root_scaling:
-            self.k_p[:] = 0.5 * self.max_jerk / self.max_acceleration
+        
+        # if self.leashing or self.square_root_scaling:
+        #     self.k_p[:] = 0.5 * self.max_jerk / self.max_acceleration
         super().__post_init__()
         self._params = tuple(list(self._params) + \
             ['max_velocity', 'max_acceleration', 'max_jerk', 'square_root_scaling', 'leashing'])
@@ -223,6 +224,7 @@ class PosController(PIDController):
         err_len = np.linalg.norm(err)
         # TODO check conditional logic
         if self.leashing:
+            # self.k_p[:] = 0.5 * self.max_jerk / self.max_acceleration
             err_unit = err / (err_len + 1e-6)
             err_len = min(err_len, self.leash)
             err = err_unit * err_len

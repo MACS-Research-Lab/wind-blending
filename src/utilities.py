@@ -3,8 +3,8 @@ from scripts.opt_multirotorenv import apply_params, get_study, get_established_c
 from rl import learn_rl, transform_rl_policy, evaluate_rl, PPO, load_agent
 
 # Where the saved agent is stored during HPO
-def get_agent(name, agent_num=None):
-    log_root_path = './tensorboard/MultirotorTrajEnv/optstudy/%s/'
+def get_agent(name, agent_num=None, filepath='MultirotorTrajEnv'):
+    log_root_path = './tensorboard/' + filepath + '/optstudy/%s/'
     study = get_study(name)
     
     if agent_num is not None:

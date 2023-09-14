@@ -73,7 +73,7 @@ def run_sim(
 
 
 
-def get_controller(m: Multirotor, scurve=False, args: Namespace=DEFAULTS):
+def get_controller(m: Multirotor, scurve=False, leashing=False, args: Namespace=DEFAULTS):
     assert m.simulation.dt <= 0.1, 'Simulation time step too large.'
     pos = PosController( # PD
         0.8, 0., 3.75,
@@ -81,7 +81,7 @@ def get_controller(m: Multirotor, scurve=False, args: Namespace=DEFAULTS):
         max_velocity=args.max_velocity,
         max_acceleration=args.max_acceleration,
         square_root_scaling=args.sqrt_scaling,
-        leashing=args.leashing
+        leashing=leashing
     )
     vel = VelController( # P
         1, 0., 0,

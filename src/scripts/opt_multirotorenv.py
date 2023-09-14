@@ -84,12 +84,12 @@ def get_study(study_name: str=DEFAULTS.study_name, seed:int=0, args: Namespace=D
 
 
 
-def get_established_controller(m: Multirotor, speed: int = 15):
+def get_established_controller(m: Multirotor, leash=False, speed: int = 15):
     """
     This returns the manually-tuned PID controller that is fixed for all experiments. It was tuned by an expert to handle up to 15 m/s wind. 
     (Though, of course, it is less safe at higher winds.)
     """
-    ctrl = get_controller_base(m, scurve=False)
+    ctrl = get_controller_base(m, scurve=False, leashing=leash)
 
     with open('../src/params/manual_pid.pkl', 'rb') as f: #TODO: make relative
         optimal_params = pickle.load(f)

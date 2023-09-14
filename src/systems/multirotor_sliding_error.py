@@ -74,7 +74,8 @@ SP = SimulationParams(dt=0.01, g=9.81, dtype=np.float32)
 def get_controller(
         m: Multirotor, max_velocity=DEFAULTS.max_velocity,
         max_acceleration=DEFAULTS.max_acceleration,
-        max_tilt=DEFAULTS.max_tilt
+        max_tilt=DEFAULTS.max_tilt,
+        leash=False
     ) -> Controller:
     assert m.simulation.dt <= 0.1, 'Simulation time step too large.'
     pos = PosController(
@@ -82,7 +83,8 @@ def get_controller(
         max_err_i=DEFAULTS.max_velocity, vehicle=m,
         max_velocity=max_velocity,
         max_acceleration=max_acceleration  ,
-        square_root_scaling=False  
+        square_root_scaling=False,
+        leashing=leash  
     )
     vel = VelController(
         2.0, 1.0, 0.5,
