@@ -141,7 +141,7 @@ def make_objective(args: Namespace=DEFAULTS):
 
         env_kwargs['steps_u'] = 50 # assume half a second
         # env_kwargs['scaling_factor'] = trial.suggest_int('scaling_factor', 1, 7, step=1) # for now, use this to determine the action range
-        env_kwargs['scaling_factor'] = 5
+        env_kwargs['scaling_factor'] = 5 
         
         square_np = np.array([[100,0,0], [100,100,0], [0,100,0], [0,0,0]]) # set up your trajectory here
         square_traj = Trajectory(None, points=square_np, resolution=bounding_rect_length)
